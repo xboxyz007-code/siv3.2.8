@@ -4,9 +4,10 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import { Plus, Search, Eye, Send, X, Trash2, FileText, ArrowRight, UserPlus, CreditCard, DollarSign, CircleCheck as CheckCircle } from 'lucide-react';
+import { Plus, Search, Eye, Send, X, Trash2, FileText, ArrowRight, UserPlus, CreditCard, DollarSign, CircleCheck as CheckCircle, Printer } from 'lucide-react';
 import type { Quotation, QuotationStatus, Customer, Product } from '@/lib/types';
 import ProductSearchInput from '@/components/ui/ProductSearchInput';
+import PrintTemplate from '@/components/PrintTemplate';
 
 const statusConfig: Record<QuotationStatus, { label: string; color: string; bg: string }> = {
   draft: { label: 'Draft', color: 'text-gray-600', bg: 'bg-gray-100' },
@@ -33,19 +34,22 @@ export default function QuotationsPage() {
   const [viewingQuotation, setViewingQuotation] = useState<QuotationWithCustomer | null>(null);
   const [quotationItems, setQuotationItems] = useState<any[]>([]);
   const [convertingQuotation, setConvertingQuotation] = useState<QuotationWithCustomer | null>(null);
+  const [companySettings, setCompanySettings] = useState<any>({});
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
-    const [quoteRes, custRes, prodRes] = await Promise.all([
+    const [quoteRes, custRes, prodRes, settingsRes] = await Promise.all([
       supabase.from('quotations').select('*, customer:customers(name, code)').order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
       supabase.from('products').select('*').eq('is_active', true).order('name'),
+      supabase.from('app_settings').select('*').limit(1).maybeSingle(),
     ]);
     setQuotations(quoteRes.data || []);
     setCustomers(custRes.data || []);
     setProducts(prodRes.data || []);
+    setCompanySettings(settingsRes.data || {});
     setLoading(false);
   }
 
@@ -192,6 +196,7 @@ export default function QuotationsPage() {
           items={quotationItems}
           onClose={() => setViewingQuotation(null)}
           onConvert={() => initiateConvert(viewingQuotation)}
+          companySettings={companySettings}
         />
       )}
 
@@ -791,88 +796,69 @@ function ConvertToInvoiceModal({ quotation, onClose, onConverted }: {
   );
 }
 
-function ViewQuotationModal({ quotation, items, onClose, onConvert }: {
+function ViewQuotationModal({ quotation, items, onClose, onConvert, companySettings }: {
   quotation: QuotationWithCustomer;
   items: any[];
   onClose: () => void;
   onConvert: () => void;
+  companySettings: any;
 }) {
   const cfg = statusConfig[quotation.status as QuotationStatus] || statusConfig.draft;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-white">
-          <h2 className="text-base font-bold">Quotation {quotation.quote_number}</h2>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+      <div className="print-modal bg-white rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="no-print flex items-center justify-between px-6 py-3 border-b border-border sticky top-0 bg-white z-10">
+          <span className="text-sm font-semibold text-muted-foreground">Quotation Preview</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.print()} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition">
+              <Printer className="w-3.5 h-3.5" />Print / PDF
+            </button>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1"><X className="w-5 h-5" /></button>
+          </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          <div className="flex justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground">Customer</p>
-              <p className="font-semibold text-foreground">{quotation.customer?.name || '-'}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-muted-foreground">Status</p>
-              <span className={`badge-status ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
-            </div>
-          </div>
+        <div className="p-8">
+          <PrintTemplate
+            docType="QUOTATION"
+            docNumber={quotation.quote_number}
+            docDate={quotation.issue_date}
+            expiryDate={quotation.expiry_date || undefined}
+            status={cfg.label}
+            company={{
+              name: companySettings.name || 'Your Company',
+              address: companySettings.address,
+              phone: companySettings.phone,
+              email: companySettings.email,
+              logo_url: companySettings.logo_url,
+            }}
+            customer={{
+              name: quotation.customer?.name || '—',
+              code: quotation.customer?.code,
+            }}
+            items={items.map((item: any) => ({
+              product_name: item.product?.name || '—',
+              product_sku: item.product?.sku,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              discount_percent: item.discount_percent || 0,
+              subtotal: item.subtotal,
+              unit_name: item.unit_name,
+            }))}
+            subtotal={Number(quotation.subtotal)}
+            discountTotal={items.reduce((s, item: any) => s + (item.quantity * item.unit_price * (item.discount_percent || 0) / 100), 0)}
+            totalAmount={Number(quotation.total_amount)}
+            notes={(quotation as any).notes}
+          />
+        </div>
 
-          <div className="grid grid-cols-2 gap-4 py-3 border-y border-border">
-            <div>
-              <p className="text-xs text-muted-foreground">Issue Date</p>
-              <p className="text-sm font-medium">{formatDate(quotation.issue_date)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Expiry Date</p>
-              <p className="text-sm font-medium">{quotation.expiry_date ? formatDate(quotation.expiry_date) : '-'}</p>
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-medium mb-2">Items</p>
-            <div className="border border-border rounded-lg overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-muted/40">
-                  <tr>
-                    <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Product</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Qty</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Price</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {items.length === 0 ? (
-                    <tr><td colSpan={4} className="px-3 py-4 text-center text-xs text-muted-foreground">No items</td></tr>
-                  ) : items.map((item, idx) => (
-                    <tr key={idx}>
-                      <td className="px-3 py-2 text-sm">{item.product?.name || '-'}</td>
-                      <td className="px-3 py-2 text-sm text-right">{item.quantity}</td>
-                      <td className="px-3 py-2 text-sm text-right">{formatCurrency(item.unit_price)}</td>
-                      <td className="px-3 py-2 text-sm text-right font-semibold">{formatCurrency(item.subtotal)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="flex justify-end bg-muted/30 rounded-lg p-4">
-            <div className="w-48">
-              <div className="flex justify-between font-bold text-lg">
-                <span>Total</span>
-                <span className="text-blue-600">{formatCurrency(quotation.total_amount)}</span>
-              </div>
-            </div>
-          </div>
-
-          {quotation.status !== 'converted' && quotation.status !== 'rejected' && quotation.status !== 'expired' && (
-            <button onClick={onConvert} className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold transition">
+        {quotation.status !== 'converted' && quotation.status !== 'rejected' && quotation.status !== 'expired' && (
+          <div className="no-print flex items-center justify-end px-8 py-4 border-t border-border">
+            <button onClick={onConvert} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition">
               <FileText className="w-4 h-4" />Convert to Invoice
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

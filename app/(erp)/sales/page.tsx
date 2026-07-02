@@ -9,6 +9,7 @@ import { ShoppingCart, Plus, Search, Eye, X, Trash2, TrendingUp, Clock, CircleCh
 import type { Invoice, InvoiceStatus, Customer, Product, Payment, PaymentMethod, ProductUnit } from '@/lib/types';
 import { isMultiUnitEnabled, getDefaultSaleUnit, convertToBaseUnit } from '@/lib/unit-utils';
 import ProductSearchInput from '@/components/ui/ProductSearchInput';
+import PrintTemplate from '@/components/PrintTemplate';
 
 const statusConfig: Record<InvoiceStatus, { label: string; color: string; bg: string }> = {
   draft: { label: 'Draft', color: 'text-gray-600', bg: 'bg-gray-100' },
@@ -152,156 +153,49 @@ export default function SalesPage() {
             </div>
           </div>
 
-          {/* Invoice body */}
-          <div className="p-8 space-y-8">
-
-            {/* Header: Company + INVOICE title */}
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-4">
-                {companySettings.logo_url && (
-                  <img src={companySettings.logo_url} alt="Logo" className="h-14 w-14 object-contain rounded-lg" />
-                )}
-                <div>
-                  <h1 className="text-xl font-bold text-foreground">{companySettings.name || 'Your Company'}</h1>
-                  {companySettings.address && <p className="text-xs text-muted-foreground mt-0.5 max-w-xs">{companySettings.address}</p>}
-                  <div className="flex flex-wrap gap-3 mt-1">
-                    {companySettings.phone && <p className="text-xs text-muted-foreground">{companySettings.phone}</p>}
-                    {companySettings.email && <p className="text-xs text-muted-foreground">{companySettings.email}</p>}
-                  </div>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-4xl font-black text-blue-600 tracking-tight">INVOICE</p>
-                <p className="text-base font-bold text-foreground mt-1">#{invoice.invoice_number}</p>
-                <span className={`badge-status ${cfg.bg} ${cfg.color} mt-2 inline-flex`}>{cfg.label}</span>
-              </div>
-            </div>
-
-            {/* Bill To + Invoice Meta */}
-            <div className="grid grid-cols-2 gap-6">
-              <div className="bg-slate-50 rounded-xl p-4 border border-border">
-                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Bill To</p>
-                <p className="font-bold text-foreground">{invoice.customer?.name || '—'}</p>
-                {invoice.customer?.phone && <p className="text-sm text-muted-foreground mt-0.5">{invoice.customer.phone}</p>}
-                {invoice.customer?.address && <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">{invoice.customer.address}</p>}
-              </div>
-              <div className="bg-slate-50 rounded-xl p-4 border border-border space-y-2.5">
-                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Details</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-muted-foreground">Invoice Date</span>
-                  <span className="text-xs font-semibold">{formatDate(invoice.invoice_date)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-muted-foreground">Due Date</span>
-                  <span className="text-xs font-semibold">{invoice.due_date ? formatDate(invoice.due_date) : 'On receipt'}</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-border">
-                  <span className="text-xs text-muted-foreground">Balance Due</span>
-                  <span className={`text-sm font-bold ${balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {formatCurrency(balance)}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Items table */}
-            <div className="border border-border rounded-xl overflow-hidden">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-border">
-                    <th className="text-left text-xs font-semibold text-muted-foreground px-4 py-3 w-8">#</th>
-                    <th className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">Product</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-4 py-3">Qty</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-4 py-3">Unit Price</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-4 py-3">Disc</th>
-                    <th className="text-right text-xs font-semibold text-muted-foreground px-4 py-3">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {items.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">No items</td></tr>
-                  ) : items.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-4 py-3 text-sm text-muted-foreground">{idx + 1}</td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm font-medium text-foreground">{item.product?.name || '—'}</p>
-                        {item.unit_name && <p className="text-xs text-muted-foreground">{item.unit_name}</p>}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right text-foreground">
-                        {item.quantity}{item.unit_name ? ` ${item.unit_name}` : ''}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right">{formatCurrency(item.unit_price)}</td>
-                      <td className="px-4 py-3 text-sm text-right text-amber-600">
-                        {(item.discount_percent || 0) > 0 ? `${item.discount_percent}%` : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right font-semibold">{formatCurrency(item.subtotal)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Totals */}
-            <div className="flex justify-end">
-              <div className="w-72 bg-slate-50 rounded-xl border border-border p-4 space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Subtotal</span>
-                  <span>{formatCurrency(Number(invoice.subtotal) + discountTotal)}</span>
-                </div>
-                {discountTotal > 0 && (
-                  <div className="flex justify-between text-sm text-amber-600">
-                    <span>Discount</span>
-                    <span>-{formatCurrency(discountTotal)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-sm font-semibold border-t border-border pt-2">
-                  <span>Invoice Total</span>
-                  <span>{formatCurrency(invoice.total_amount)}</span>
-                </div>
-                <div className="flex justify-between text-sm text-green-600">
-                  <span>Amount Paid</span>
-                  <span>-{formatCurrency(invoice.amount_paid)}</span>
-                </div>
-                <div className="flex justify-between font-bold text-base border-t border-border pt-2">
-                  <span>Balance Due</span>
-                  <span className={balance > 0 ? 'text-red-600' : 'text-green-600'}>{formatCurrency(balance)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Notes */}
-            {(invoice as any).notes && (
-              <div className="border-t border-dashed border-border pt-4">
-                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Notes</p>
-                <p className="text-sm text-muted-foreground">{(invoice as any).notes}</p>
-              </div>
-            )}
-
-            {/* Payment Info */}
-            {payments && payments.length > 0 && (
-              <div className="border-t border-dashed border-border pt-4">
-                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Payments Received</p>
-                <div className="space-y-2">
-                  {payments.map((p, idx) => (
-                    <div key={p.id || idx} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
-                      <div>
-                        <p className="text-xs font-medium text-foreground">{p.payment_number}</p>
-                        <p className="text-[10px] text-muted-foreground">{formatDate(p.payment_date)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs font-medium text-green-600">{formatCurrency(p.amount)}</p>
-                        <p className="text-[10px] text-muted-foreground capitalize">{p.payment_method?.replace('_', ' ')}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Footer text */}
-            <div className="border-t border-dashed border-border pt-4 text-center">
-              <p className="text-xs text-muted-foreground">Thank you for your business!</p>
-            </div>
+          {/* Print body */}
+          <div className="p-8">
+            <PrintTemplate
+              docType="INVOICE"
+              docNumber={invoice.invoice_number}
+              docDate={invoice.invoice_date}
+              dueDate={invoice.due_date || undefined}
+              status={cfg.label}
+              company={{
+                name: companySettings.name || 'Your Company',
+                address: companySettings.address,
+                phone: companySettings.phone,
+                email: companySettings.email,
+                logo_url: companySettings.logo_url,
+              }}
+              customer={{
+                name: invoice.customer?.name || '—',
+                code: invoice.customer?.code,
+                phone: invoice.customer?.phone,
+                address: invoice.customer?.address,
+              }}
+              items={items.map((item: any) => ({
+                product_name: item.product?.name || '—',
+                product_sku: item.product?.sku,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                discount_percent: item.discount_percent || 0,
+                subtotal: item.subtotal,
+                unit_name: item.unit_name,
+              }))}
+              subtotal={Number(invoice.subtotal)}
+              discountTotal={discountTotal}
+              totalAmount={Number(invoice.total_amount)}
+              amountPaid={Number(invoice.amount_paid)}
+              balanceDue={balance}
+              notes={(invoice as any).notes}
+              payments={payments?.map((p: any) => ({
+                payment_number: p.payment_number,
+                payment_date: p.payment_date,
+                amount: p.amount,
+                payment_method: p.payment_method,
+              }))}
+            />
           </div>
 
           {/* Action buttons (hidden on print) */}

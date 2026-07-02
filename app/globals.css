@@ -158,6 +158,18 @@
     z-index: 9999 !important;
     padding: 2rem !important;
     overflow: visible !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
   }
   .no-print { display: none !important; }
+  .print-document {
+    max-width: 800px !important;
+    margin: 0 auto !important;
+  }
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
 }
