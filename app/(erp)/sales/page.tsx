@@ -23,6 +23,7 @@ const statusConfig: Record<InvoiceStatus, { label: string; color: string; bg: st
 interface InvoiceWithCustomer extends Omit<Invoice, 'customer'> {
   customer?: { name: string; code: string; phone?: string; address?: string };
   sales_returns?: { id: string; return_number: string; total_refund_amount: number; items: { quantity_returned: number }[] }[];
+  payments?: { id: string; payment_method: string; amount: number; payment_date: string }[];
 }
 
 interface InvoiceItem {
@@ -44,10 +45,13 @@ export default function SalesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+  const [paymentMethods, setPaymentMethods] = useState<{ code: string; name: string }[]>([]);
   const [stats, setStats] = useState({ total: 0, paid: 0, outstanding: 0, overdue: 0 });
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [viewingInvoice, setViewingInvoice] = useState<InvoiceWithCustomer | null>(null);
   const [invoiceItems, setInvoiceItems] = useState<any[]>([]);
+  const [invoicePayments, setInvoicePayments] = useState<any[]>([]);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentInvoice, setPaymentInvoice] = useState<InvoiceWithCustomer | null>(null);
   const [companySettings, setCompanySettings] = useState<any>({ name: '', address: '', phone: '', email: '', logo_url: '' });
@@ -56,12 +60,14 @@ export default function SalesPage() {
 
   async function loadData() {
     setLoading(true);
-    const [invRes, custRes, prodRes, settingsRes, returnsRes] = await Promise.all([
+    const [invRes, custRes, prodRes, settingsRes, returnsRes, paymentMethodsRes, paymentsRes] = await Promise.all([
       supabase.from('invoices').select('*, customer:customers(name, code, phone, address)').order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
       supabase.from('products').select(`*, units:product_units(id, product_id, unit_name, unit_short, conversion_factor, is_base_unit, is_sale_unit, price, cost_price, is_active, sort_order), inventory_items(quantity_on_hand)`).eq('is_active', true).order('name'),
       supabase.from('app_settings').select('setting_value').eq('setting_key', 'company').maybeSingle(),
       supabase.from('sales_returns').select('id, invoice_id, return_number, total_refund_amount, items:sales_return_items(quantity_returned)'),
+      supabase.from('payment_methods').select('code, name').eq('is_active', true).order('sort_order'),
+      supabase.from('payments').select('id, reference_id, payment_method, amount, payment_date').eq('reference_type', 'invoice'),
     ]);
 
     // Attach sales returns to their corresponding invoices
@@ -72,12 +78,22 @@ export default function SalesPage() {
       returnsMap.set(ret.invoice_id, existing);
     });
 
+    // Attach payments to their corresponding invoices
+    const paymentsMap = new Map<string, any[]>();
+    (paymentsRes.data || []).forEach((pay: any) => {
+      const existing = paymentsMap.get(pay.reference_id) || [];
+      existing.push(pay);
+      paymentsMap.set(pay.reference_id, existing);
+    });
+
     const invoicesWithReturns = (invRes.data || []).map((inv: any) => ({
       ...inv,
-      sales_returns: returnsMap.get(inv.id) || []
+      sales_returns: returnsMap.get(inv.id) || [],
+      payments: paymentsMap.get(inv.id) || []
     }));
 
     setInvoices(invoicesWithReturns);
+    setPaymentMethods(paymentMethodsRes.data || []);
     setCustomers(custRes.data || []);
     setProducts(prodRes.data || []);
     if (settingsRes.data?.setting_value) setCompanySettings(settingsRes.data.setting_value);
@@ -93,17 +109,26 @@ export default function SalesPage() {
   }
 
   async function viewInvoiceDetails(invoice: InvoiceWithCustomer) {
-    const { data } = await supabase
-      .from('invoice_items')
-      .select('*, product:products(name, sku, unit)')
-      .eq('invoice_id', invoice.id);
-    setInvoiceItems(data || []);
+    const [itemsRes, paymentsRes] = await Promise.all([
+      supabase
+        .from('invoice_items')
+        .select('*, product:products(name, sku, unit)')
+        .eq('invoice_id', invoice.id),
+      supabase
+        .from('payments')
+        .select('id, payment_number, payment_method, amount, payment_date, reference_number')
+        .eq('reference_type', 'invoice')
+        .eq('reference_id', invoice.id)
+    ]);
+    setInvoiceItems(itemsRes.data || []);
+    setInvoicePayments(paymentsRes.data || []);
     setViewingInvoice(invoice);
   }
 
-  function ViewInvoiceModal({ invoice, items, onClose, onRecordPayment, onUpdateStatus }: {
+  function ViewInvoiceModal({ invoice, items, payments, onClose, onRecordPayment, onUpdateStatus }: {
     invoice: InvoiceWithCustomer;
     items: any[];
+    payments: any[];
     onClose: () => void;
     onRecordPayment: () => void;
     onUpdateStatus: (status: InvoiceStatus) => void;
@@ -252,6 +277,27 @@ export default function SalesPage() {
               </div>
             )}
 
+            {/* Payment Info */}
+            {payments && payments.length > 0 && (
+              <div className="border-t border-dashed border-border pt-4">
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Payments Received</p>
+                <div className="space-y-2">
+                  {payments.map((p, idx) => (
+                    <div key={p.id || idx} className="flex items-center justify-between bg-muted/30 rounded-lg px-3 py-2">
+                      <div>
+                        <p className="text-xs font-medium text-foreground">{p.payment_number}</p>
+                        <p className="text-[10px] text-muted-foreground">{formatDate(p.payment_date)}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-medium text-green-600">{formatCurrency(p.amount)}</p>
+                        <p className="text-[10px] text-muted-foreground capitalize">{p.payment_method?.replace('_', ' ')}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Footer text */}
             <div className="border-t border-dashed border-border pt-4 text-center">
               <p className="text-xs text-muted-foreground">Thank you for your business!</p>
@@ -299,7 +345,8 @@ export default function SalesPage() {
 
   const filtered = invoices.filter(i =>
     (!search || i.invoice_number.toLowerCase().includes(search.toLowerCase()) || i.customer?.name?.toLowerCase().includes(search.toLowerCase())) &&
-    (!filterStatus || i.status === filterStatus)
+    (!filterStatus || i.status === filterStatus) &&
+    (!filterPaymentMethod || (i.payments && i.payments.some(p => p.payment_method === filterPaymentMethod)))
   );
 
   return (
@@ -341,6 +388,10 @@ export default function SalesPage() {
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
           <option value="">All Status</option>
           {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <select value={filterPaymentMethod} onChange={e => setFilterPaymentMethod(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+          <option value="">All Payment Methods</option>
+          {paymentMethods.map(pm => <option key={pm.code} value={pm.code}>{pm.name}</option>)}
         </select>
       </div>
 
@@ -399,6 +450,12 @@ export default function SalesPage() {
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
                         <span className={`badge-status ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
+                        {inv.payments && inv.payments.length > 0 && (
+                          <span className="badge-status bg-slate-100 text-slate-700 flex items-center gap-0.5">
+                            <CreditCard className="w-2.5 h-2.5" />
+                            {inv.payments.map(p => p.payment_method.replace('_', ' ')).join(', ')}
+                          </span>
+                        )}
                         {hasReturns && (
                           <span className="badge-status bg-amber-100 text-amber-700 flex items-center gap-0.5">
                             <Package className="w-2.5 h-2.5" />
@@ -448,6 +505,7 @@ export default function SalesPage() {
         <ViewInvoiceModal
           invoice={viewingInvoice}
           items={invoiceItems}
+          payments={invoicePayments}
           onClose={() => setViewingInvoice(null)}
           onRecordPayment={() => { setViewingInvoice(null); openPaymentModal(viewingInvoice); }}
           onUpdateStatus={(status) => { setViewingInvoice(null); updateInvoiceStatus(viewingInvoice, status); }}

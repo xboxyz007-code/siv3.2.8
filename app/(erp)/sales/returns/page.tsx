@@ -552,14 +552,14 @@ function ReturnModal({ invoices, onClose, onSaved }: {
         // Get current balance
         const { data: currentAccount } = await supabase
           .from('accounts')
-          .select('balance, type')
+          .select('balance, account_type')
           .eq('id', accountId)
           .single();
 
         if (currentAccount) {
           // For asset/expense accounts: debit increases, credit decreases
           // For liability/equity/revenue accounts: credit increases, debit decreases
-          const isDebitAccount = ['asset', 'expense'].includes(currentAccount.type);
+          const isDebitAccount = ['asset', 'expense'].includes(currentAccount.account_type);
           const netChange = isDebitAccount
             ? totalDebit - totalCredit
             : totalCredit - totalDebit;

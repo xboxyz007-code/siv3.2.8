@@ -12,7 +12,7 @@ import type { Account } from '@/lib/types';
 interface JournalLine {
   id: string;
   account_id: string;
-  account?: { name: string; code: string } | { name: string; code: string }[];
+  account?: { name: string; code: string; balance: number; account_type: string } | { name: string; code: string; balance: number; account_type: string }[];
   description: string;
   debit: number;
   credit: number;
@@ -42,7 +42,7 @@ export default function AccountingPage() {
     const [accountsRes, entriesRes] = await Promise.all([
       supabase.from('accounts').select('*').eq('is_active', true).order('code'),
       supabase.from('journal_entries')
-        .select('id, entry_number, entry_date, description, reference_type, total_debit, total_credit, lines:journal_lines(id, account_id, description, debit, credit, account:accounts(name, code))')
+        .select('id, entry_number, entry_date, description, reference_type, total_debit, total_credit, lines:journal_lines(id, account_id, description, debit, credit, account:accounts(name, code, balance, account_type))')
         .eq('is_posted', true)
         .order('created_at', { ascending: false })
         .limit(10),
@@ -261,6 +261,13 @@ export default function AccountingPage() {
                     <div className="space-y-1 text-xs">
                       {entry.lines.map((line, idx) => {
                         const account = Array.isArray(line.account) ? line.account[0] : line.account;
+                        const isDebitAccount = account?.account_type && ['asset', 'expense'].includes(account.account_type);
+                        const netChange = isDebitAccount
+                          ? Number(line.debit || 0) - Number(line.credit || 0)
+                          : Number(line.credit || 0) - Number(line.debit || 0);
+                        const currentBalance = Number(account?.balance || 0);
+                        const previousBalance = currentBalance - netChange;
+
                         return (
                           <div key={line.id || idx} className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -271,9 +278,14 @@ export default function AccountingPage() {
                               )}
                               <span className="text-muted-foreground">{account?.name || 'Account'}</span>
                             </div>
-                            <span className={Number(line.debit) > 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
-                              {Number(line.debit) > 0 ? `Dr. ${formatCurrency(line.debit)}` : `Cr. ${formatCurrency(line.credit)}`}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground">
+                                {formatCurrency(previousBalance)} → <span className="font-medium text-foreground">{formatCurrency(currentBalance)}</span>
+                              </span>
+                              <span className={Number(line.debit) > 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                                {Number(line.debit) > 0 ? `Dr. ${formatCurrency(line.debit)}` : `Cr. ${formatCurrency(line.credit)}`}
+                              </span>
+                            </div>
                           </div>
                         );
                       })}
