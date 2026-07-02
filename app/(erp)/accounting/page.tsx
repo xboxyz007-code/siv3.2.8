@@ -799,6 +799,7 @@ function RecordReceivableModal({ accounts, onSaved }: { accounts: Account[]; onS
           total_debit: amount,
           total_credit: amount,
           is_posted: true,
+          customer_id: form.customer_id,
         })
         .select()
         .single();
@@ -942,6 +943,7 @@ function RecordPayableModal({ accounts, onSaved }: { accounts: Account[]; onSave
           total_debit: amount,
           total_credit: amount,
           is_posted: true,
+          supplier_id: form.supplier_id,
         })
         .select()
         .single();

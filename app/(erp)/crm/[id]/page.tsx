@@ -6,11 +6,19 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import {
-  ArrowLeft, Phone, Mail, MapPin, Building, CreditCard, Calendar,
-  ShoppingBag, DollarSign, Star, Edit, Eye, Receipt, Truck, FileText
-} from 'lucide-react';
+import { ArrowLeft, Phone, Mail, MapPin, Building, CreditCard, Calendar, ShoppingBag, DollarSign, Star, CreditCard as Edit, Eye, Receipt, Truck, FileText, User } from 'lucide-react';
 import type { Customer, Invoice, Quotation, Delivery } from '@/lib/types';
+
+interface ManualReceivable {
+  id: string;
+  entry_number: string;
+  entry_date: string;
+  description: string;
+  total_debit: number;
+  created_at: string;
+  paid_amount: number;
+  outstanding_balance: number;
+}
 
 interface CustomerStats {
   totalInvoices: number;
@@ -18,6 +26,8 @@ interface CustomerStats {
   totalOutstanding: number;
   totalPurchases: number;
   activeDeliveries: number;
+  manualReceivables: number;
+  manualReceivablesOutstanding: number;
 }
 
 export default function CustomerDetailPage() {
@@ -28,12 +38,14 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<CustomerStats>({
-    totalInvoices: 0, totalPaid: 0, totalOutstanding: 0, totalPurchases: 0, activeDeliveries: 0
+    totalInvoices: 0, totalPaid: 0, totalOutstanding: 0, totalPurchases: 0, activeDeliveries: 0,
+    manualReceivables: 0, manualReceivablesOutstanding: 0
   });
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [activeTab, setActiveTab] = useState<'invoices' | 'quotations' | 'deliveries'>('invoices');
+  const [manualReceivables, setManualReceivables] = useState<ManualReceivable[]>([]);
+  const [activeTab, setActiveTab] = useState<'invoices' | 'quotations' | 'deliveries' | 'receivables'>('invoices');
 
   useEffect(() => { loadCustomerData(); }, [customerId]);
 
@@ -53,19 +65,40 @@ export default function CustomerDetailPage() {
     }
     setCustomer(custData);
 
-    const [invRes, quoteRes, delivRes] = await Promise.all([
+    const [invRes, quoteRes, delivRes, receivableRes, receivablePaymentsRes] = await Promise.all([
       supabase.from('invoices').select('*').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(20),
       supabase.from('quotations').select('*').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(10),
       supabase.from('deliveries').select('*').eq('customer_id', customerId).order('created_at', { ascending: false }).limit(10),
+      supabase.from('journal_entries').select('id, entry_number, entry_date, description, total_debit, created_at').eq('customer_id', customerId).eq('reference_type', 'receivable').eq('is_posted', true).order('entry_date', { ascending: false }),
+      supabase.from('payments').select('reference_id, amount').eq('reference_type', 'receivable'),
     ]);
 
     setInvoices(invRes.data || []);
     setQuotations(quoteRes.data || []);
     setDeliveries(delivRes.data || []);
 
+    // Calculate manual receivables with payments
+    const receivablePaymentsMap = new Map<string, number>();
+    (receivablePaymentsRes.data || []).forEach((p: any) => {
+      const current = receivablePaymentsMap.get(p.reference_id) || 0;
+      receivablePaymentsMap.set(p.reference_id, current + Number(p.amount));
+    });
+
+    const receivablesWithPayments: ManualReceivable[] = (receivableRes.data || []).map((r: any) => {
+      const paidAmount = receivablePaymentsMap.get(r.id) || 0;
+      return {
+        ...r,
+        paid_amount: paidAmount,
+        outstanding_balance: Number(r.total_debit) - paidAmount,
+      };
+    });
+
+    setManualReceivables(receivablesWithPayments);
+
     const invData = invRes.data || [];
     const totalPaid = invData.reduce((s, i) => s + Number(i.amount_paid), 0);
     const totalOut = invData.reduce((s, i) => s + Number(i.balance_due || i.total_amount - i.amount_paid), 0);
+    const manualReceivablesOutstanding = receivablesWithPayments.reduce((s, r) => s + r.outstanding_balance, 0);
 
     setStats({
       totalInvoices: invData.length,
@@ -73,6 +106,8 @@ export default function CustomerDetailPage() {
       totalOutstanding: totalOut,
       totalPurchases: custData.total_purchases,
       activeDeliveries: (delivRes.data || []).filter(d => d.status !== 'delivered' && d.status !== 'returned').length,
+      manualReceivables: receivablesWithPayments.length,
+      manualReceivablesOutstanding,
     });
 
     setLoading(false);
@@ -181,9 +216,13 @@ export default function CustomerDetailPage() {
               </div>
               <div className="bg-red-50 rounded-lg p-3 text-center">
                 <p className="text-xl font-bold text-red-600">{formatCurrency(stats.totalOutstanding)}</p>
-                <p className="text-xs text-red-700">Outstanding</p>
+                <p className="text-xs text-red-700">Invoice Outstanding</p>
               </div>
-              <div className="bg-amber-50 rounded-lg p-3 text-center">
+              <div className="bg-purple-50 rounded-lg p-3 text-center">
+                <p className="text-xl font-bold text-purple-600">{formatCurrency(stats.manualReceivablesOutstanding)}</p>
+                <p className="text-xs text-purple-700">Manual Receivables</p>
+              </div>
+              <div className="bg-amber-50 rounded-lg p-3 text-center col-span-2">
                 <p className="text-xl font-bold text-amber-600">{stats.activeDeliveries}</p>
                 <p className="text-xs text-amber-700">Active Deliveries</p>
               </div>
@@ -196,6 +235,7 @@ export default function CustomerDetailPage() {
             <div className="flex border-b border-border">
               {[
                 { key: 'invoices', label: 'Invoices', icon: Receipt },
+                { key: 'receivables', label: 'Manual Receivables', icon: User },
                 { key: 'quotations', label: 'Quotations', icon: FileText },
                 { key: 'deliveries', label: 'Deliveries', icon: Truck },
               ].map(tab => (
@@ -253,6 +293,42 @@ export default function CustomerDetailPage() {
                                 <Eye className="w-3.5 h-3.5" />
                               </Link>
                             </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'receivables' && (
+                <div className="overflow-x-auto">
+                  {manualReceivables.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <User className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      No manual receivables
+                    </div>
+                  ) : (
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Entry #</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Date</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Description</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Amount</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Paid</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Outstanding</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {manualReceivables.map(rec => (
+                          <tr key={rec.id} className="hover:bg-muted/30">
+                            <td className="px-3 py-2 text-sm font-semibold text-blue-600">{rec.entry_number}</td>
+                            <td className="px-3 py-2 text-sm text-muted-foreground">{formatDate(rec.entry_date)}</td>
+                            <td className="px-3 py-2 text-sm text-foreground">{rec.description}</td>
+                            <td className="px-3 py-2 text-sm text-right font-semibold">{formatCurrency(rec.total_debit)}</td>
+                            <td className="px-3 py-2 text-sm text-right text-green-600">{formatCurrency(rec.paid_amount)}</td>
+                            <td className="px-3 py-2 text-sm text-right text-red-600 font-bold">{formatCurrency(rec.outstanding_balance)}</td>
                           </tr>
                         ))}
                       </tbody>

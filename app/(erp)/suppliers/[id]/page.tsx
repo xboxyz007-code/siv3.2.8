@@ -6,11 +6,19 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import {
-  ArrowLeft, Phone, Mail, MapPin, Building, CreditCard, Calendar,
-  ShoppingBag, DollarSign, Star, Edit, Eye, Package, FileText
-} from 'lucide-react';
+import { ArrowLeft, Phone, Mail, MapPin, Building, CreditCard, Calendar, ShoppingBag, DollarSign, Star, CreditCard as Edit, Eye, Package, FileText, Building2 } from 'lucide-react';
 import type { Supplier, PurchaseOrder } from '@/lib/types';
+
+interface ManualPayable {
+  id: string;
+  entry_number: string;
+  entry_date: string;
+  description: string;
+  total_credit: number;
+  created_at: string;
+  paid_amount: number;
+  outstanding_balance: number;
+}
 
 interface SupplierStats {
   totalPOs: number;
@@ -18,6 +26,8 @@ interface SupplierStats {
   totalOutstanding: number;
   totalPurchases: number;
   pendingPOs: number;
+  manualPayables: number;
+  manualPayablesOutstanding: number;
 }
 
 export default function SupplierDetailPage() {
@@ -28,9 +38,12 @@ export default function SupplierDetailPage() {
   const [supplier, setSupplier] = useState<Supplier | null>(null);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<SupplierStats>({
-    totalPOs: 0, totalPaid: 0, totalOutstanding: 0, totalPurchases: 0, pendingPOs: 0
+    totalPOs: 0, totalPaid: 0, totalOutstanding: 0, totalPurchases: 0, pendingPOs: 0,
+    manualPayables: 0, manualPayablesOutstanding: 0
   });
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [manualPayables, setManualPayables] = useState<ManualPayable[]>([]);
+  const [activeTab, setActiveTab] = useState<'purchase_orders' | 'payables'>('purchase_orders');
 
   useEffect(() => { loadSupplierData(); }, [supplierId]);
 
@@ -50,19 +63,37 @@ export default function SupplierDetailPage() {
     }
     setSupplier(supData);
 
-    const { data: poData } = await supabase
-      .from('purchase_orders')
-      .select('*')
-      .eq('supplier_id', supplierId)
-      .order('created_at', { ascending: false })
-      .limit(20);
+    const [poRes, payableRes, payablePaymentsRes] = await Promise.all([
+      supabase.from('purchase_orders').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: false }).limit(20),
+      supabase.from('journal_entries').select('id, entry_number, entry_date, description, total_credit, created_at').eq('supplier_id', supplierId).eq('reference_type', 'payable').eq('is_posted', true).order('entry_date', { ascending: false }),
+      supabase.from('payments').select('reference_id, amount').eq('reference_type', 'payable'),
+    ]);
 
-    setPurchaseOrders(poData || []);
+    setPurchaseOrders(poRes.data || []);
 
-    const poList = poData || [];
+    // Calculate manual payables with payments
+    const payablePaymentsMap = new Map<string, number>();
+    (payablePaymentsRes.data || []).forEach((p: any) => {
+      const current = payablePaymentsMap.get(p.reference_id) || 0;
+      payablePaymentsMap.set(p.reference_id, current + Number(p.amount));
+    });
+
+    const payablesWithPayments: ManualPayable[] = (payableRes.data || []).map((p: any) => {
+      const paidAmount = payablePaymentsMap.get(p.id) || 0;
+      return {
+        ...p,
+        paid_amount: paidAmount,
+        outstanding_balance: Number(p.total_credit) - paidAmount,
+      };
+    });
+
+    setManualPayables(payablesWithPayments);
+
+    const poList = poRes.data || [];
     const totalPaid = poList.reduce((s, po) => s + Number(po.amount_paid), 0);
     const totalOut = poList.reduce((s, po) => s + Number(po.total_amount) - Number(po.amount_paid), 0);
     const pendingPOs = poList.filter(po => po.status === 'pending_approval' || po.status === 'draft').length;
+    const manualPayablesOutstanding = payablesWithPayments.reduce((s, p) => s + p.outstanding_balance, 0);
 
     setStats({
       totalPOs: poList.length,
@@ -70,6 +101,8 @@ export default function SupplierDetailPage() {
       totalOutstanding: totalOut,
       totalPurchases: supData.total_purchases,
       pendingPOs,
+      manualPayables: payablesWithPayments.length,
+      manualPayablesOutstanding,
     });
 
     setLoading(false);
@@ -191,9 +224,13 @@ export default function SupplierDetailPage() {
               </div>
               <div className="bg-red-50 rounded-lg p-3 text-center">
                 <p className="text-xl font-bold text-red-600">{formatCurrency(stats.totalOutstanding)}</p>
-                <p className="text-xs text-red-700">Payables</p>
+                <p className="text-xs text-red-700">PO Payables</p>
               </div>
-              <div className="bg-amber-50 rounded-lg p-3 text-center">
+              <div className="bg-purple-50 rounded-lg p-3 text-center">
+                <p className="text-xl font-bold text-purple-600">{formatCurrency(stats.manualPayablesOutstanding)}</p>
+                <p className="text-xs text-purple-700">Manual Payables</p>
+              </div>
+              <div className="bg-amber-50 rounded-lg p-3 text-center col-span-2">
                 <p className="text-xl font-bold text-amber-600">{stats.pendingPOs}</p>
                 <p className="text-xs text-amber-700">Pending POs</p>
               </div>
@@ -210,61 +247,112 @@ export default function SupplierDetailPage() {
 
         <div className="lg:col-span-2">
           <div className="bg-white rounded-xl border border-border shadow-sm">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <Package className="w-4 h-4" />Purchase Orders
-              </h3>
-              <Link href={`/purchases?supplier=${supplier.id}`} className="text-xs text-blue-600 hover:text-blue-700">View All</Link>
+            <div className="flex border-b border-border">
+              {[
+                { key: 'purchase_orders', label: 'Purchase Orders', icon: Package },
+                { key: 'payables', label: 'Manual Payables', icon: Building2 },
+              ].map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition ${
+                    activeTab === tab.key
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <tab.icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
             <div className="p-4">
-              <div className="overflow-x-auto">
-                {purchaseOrders.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    <ShoppingBag className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                    No purchase orders yet
-                  </div>
-                ) : (
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">PO #</th>
-                        <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Date</th>
-                        <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Expected</th>
-                        <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Amount</th>
-                        <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Paid</th>
-                        <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Balance</th>
-                        <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Status</th>
-                        <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {purchaseOrders.map(po => {
-                        const cfg = statusConfig[po.status] || statusConfig.draft;
-                        const balance = po.total_amount - po.amount_paid;
-                        return (
-                          <tr key={po.id} className="hover:bg-muted/30">
-                            <td className="px-3 py-2 text-sm font-semibold text-blue-600">{po.po_number}</td>
-                            <td className="px-3 py-2 text-sm text-muted-foreground">{formatDate(po.order_date)}</td>
-                            <td className="px-3 py-2 text-sm text-muted-foreground">{po.expected_date ? formatDate(po.expected_date) : '-'}</td>
-                            <td className="px-3 py-2 text-sm text-right font-semibold">{formatCurrency(po.total_amount)}</td>
-                            <td className="px-3 py-2 text-sm text-right text-green-600">{formatCurrency(po.amount_paid)}</td>
-                            <td className="px-3 py-2 text-sm text-right text-red-600 font-bold">{formatCurrency(balance)}</td>
-                            <td className="px-3 py-2">
-                              <span className={`badge-status ${cfg.color}`}>{cfg.label}</span>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <Link href={`/purchases?view=${po.id}`} className="w-7 h-7 inline-flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600">
-                                <Eye className="w-3.5 h-3.5" />
-                              </Link>
-                            </td>
+              {activeTab === 'purchase_orders' && (
+                <div className="overflow-x-auto">
+                  {purchaseOrders.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <ShoppingBag className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      No purchase orders yet
+                    </div>
+                  ) : (
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">PO #</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Date</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Expected</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Amount</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Paid</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Balance</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Status</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {purchaseOrders.map(po => {
+                          const cfg = statusConfig[po.status] || statusConfig.draft;
+                          const balance = po.total_amount - po.amount_paid;
+                          return (
+                            <tr key={po.id} className="hover:bg-muted/30">
+                              <td className="px-3 py-2 text-sm font-semibold text-blue-600">{po.po_number}</td>
+                              <td className="px-3 py-2 text-sm text-muted-foreground">{formatDate(po.order_date)}</td>
+                              <td className="px-3 py-2 text-sm text-muted-foreground">{po.expected_date ? formatDate(po.expected_date) : '-'}</td>
+                              <td className="px-3 py-2 text-sm text-right font-semibold">{formatCurrency(po.total_amount)}</td>
+                              <td className="px-3 py-2 text-sm text-right text-green-600">{formatCurrency(po.amount_paid)}</td>
+                              <td className="px-3 py-2 text-sm text-right text-red-600 font-bold">{formatCurrency(balance)}</td>
+                              <td className="px-3 py-2">
+                                <span className={`badge-status ${cfg.color}`}>{cfg.label}</span>
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <Link href={`/purchases?view=${po.id}`} className="w-7 h-7 inline-flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600">
+                                  <Eye className="w-3.5 h-3.5" />
+                                </Link>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'payables' && (
+                <div className="overflow-x-auto">
+                  {manualPayables.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <Building2 className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      No manual payables
+                    </div>
+                  ) : (
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Entry #</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Date</th>
+                          <th className="text-left text-xs font-semibold text-muted-foreground px-3 py-2">Description</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Amount</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Paid</th>
+                          <th className="text-right text-xs font-semibold text-muted-foreground px-3 py-2">Outstanding</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {manualPayables.map(pay => (
+                          <tr key={pay.id} className="hover:bg-muted/30">
+                            <td className="px-3 py-2 text-sm font-semibold text-blue-600">{pay.entry_number}</td>
+                            <td className="px-3 py-2 text-sm text-muted-foreground">{formatDate(pay.entry_date)}</td>
+                            <td className="px-3 py-2 text-sm text-foreground">{pay.description}</td>
+                            <td className="px-3 py-2 text-sm text-right font-semibold">{formatCurrency(pay.total_credit)}</td>
+                            <td className="px-3 py-2 text-sm text-right text-green-600">{formatCurrency(pay.paid_amount)}</td>
+                            <td className="px-3 py-2 text-sm text-right text-red-600 font-bold">{formatCurrency(pay.outstanding_balance)}</td>
                           </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
